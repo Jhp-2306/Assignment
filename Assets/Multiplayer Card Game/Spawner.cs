@@ -4,6 +4,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using static Unity.Collections.Unicode;
 
 public class Spawner : MonoBehaviour, INetworkRunnerCallbacks
 {
@@ -63,7 +64,9 @@ public class Spawner : MonoBehaviour, INetworkRunnerCallbacks
         if(runner.IsServer)
         {
             Debug.Log("onPLayerJoined we are in server");
-            runner.Spawn(playerprefab,inputAuthority: player).GetBehaviour<NetworkPlayer>().playerref=player;
+            var t=runner.Spawn(playerprefab,inputAuthority: player).GetBehaviour<NetworkPlayer>();
+            t.playerref = player;
+            //t.playername = PlayerPrefs.GetString(Constants.ConstantsString.playerNamePrefsID, $"Random");
 
         }
         else

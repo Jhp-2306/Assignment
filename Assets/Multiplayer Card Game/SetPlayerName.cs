@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class SetPlayerName : MonoBehaviour
 {
@@ -10,18 +11,7 @@ public class SetPlayerName : MonoBehaviour
     public void AddPlayerName()
     {
         PlayerPrefs.SetString(Constants.ConstantsString.playerNamePrefsID, name.text);
-        NamePanel.SetActive(false);
-        NamePanel.SetActive(true);
-
-        NetworkRunnerHandler handler = FindAnyObjectByType<NetworkRunnerHandler>();
-        if (handler != null)
-        {
-            handler.OnJoinLobby();
-        }
-        else
-        {
-            Debug.Log("Failed to identity the networkrunnerhandler script");
-        }
+        SceneManager.LoadScene(1);
     }
 
 }

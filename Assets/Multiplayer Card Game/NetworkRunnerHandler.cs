@@ -12,6 +12,7 @@ using TMPro;
 public class NetworkRunnerHandler : MonoBehaviour
 {
     public NetworkRunner networkRunnerPrefab;
+    public CardGameManager Mangager;
 
     private NetworkRunner runnerInstance;
     string LobbyId = "Lobby01";

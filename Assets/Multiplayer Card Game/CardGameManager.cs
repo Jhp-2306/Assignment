@@ -9,6 +9,11 @@ using UnityEngine.UIElements;
 
 public class CardGameManager : NetworkBehaviour
 {
+    public enum GameState
+    {
+        GonnaStart,
+        onGoing,
+    }
     //List<int> cardNumbers;
     public static CardGameManager Instance;
     float potChips;
@@ -17,12 +22,27 @@ public class CardGameManager : NetworkBehaviour
     public Transform profileParent;
     private Dictionary<PlayerRef, int> playerNumbers = new Dictionary<PlayerRef, int>();
     private Dictionary<PlayerRef, bool> playerStatus = new Dictionary<PlayerRef, bool>(); // True = Contest, False = Fold
+    private Dictionary<PlayerRef, int> playerBets = new Dictionary<PlayerRef, int>(); // True = AsRasie, False = called
     private List<int> assignedNumbers = new List<int>();
     private int currentPlayerIndex = 0;
     public List<NetworkPlayer> playerList = new List<NetworkPlayer>();
     public TextMeshProUGUI NumberTxt;
     public GameObject StartButton;
     bool gameStarted;
+    public TextMeshProUGUI PotSize;
+    public BettingUI bettingUI;
+    public GameObject RoundStatusGO;
+    public TextMeshProUGUI RoundStatustxt;
+    public TextMeshProUGUI RoundDeclareStatustxt;
+    public TextMeshProUGUI TotalChips;
+    bool isBetMatched=false;
+    //private GameState _state = GameState.GonnaStart;
+    [Networked] public GameState _state { get; set; }
+    //int cout = 0;
+    [Networked] public int Pot_Size { get; set; } = 0;
+    [Networked] public int Rasie { get; set; } = 0;//Max Bet for the currentpot
+    bool isSpawnedCalled=false;
+    public GameObject MyInput;
     private void Awake()
     {
         if (Instance == null)
@@ -38,12 +58,21 @@ public class CardGameManager : NetworkBehaviour
     public override void Spawned()
     {
         StartButton.SetActive(!gameStarted && Runner.GameMode == GameMode.Host && Runner.ActivePlayers.Count() >= 2);
-       
+        isSpawnedCalled = true;
     }
     private void Update()
-    {        
-        if(Runner!=null)
-        StartButton.SetActive(!gameStarted&&Runner.GameMode == GameMode.Host && Runner.ActivePlayers.Count() >= 2);
+    {
+        if (Runner != null)
+        {
+            StartButton.SetActive(!gameStarted && Runner.GameMode == GameMode.Host && Runner.ActivePlayers.Count() >= 2);
+        }
+        if (isSpawnedCalled)
+        {
+            PotSize.text = $"${Pot_Size}";
+
+        if(localPLayer != null)
+            TotalChips.text=$"${localPLayer.Chips.ToString()}";
+        }
     }
     public void OnStartPressed()
     {
@@ -67,6 +96,7 @@ public class CardGameManager : NetworkBehaviour
 
     private void StartNewRound()
     {
+        _state = GameState.onGoing;
         ResetGameState();
         AssignNumbersToPlayers();
         StartTurn();
@@ -84,86 +114,52 @@ public class CardGameManager : NetworkBehaviour
         Debug.Log($"It's Player {currentPlayer.PlayerId}'s turn.");
         RPC_StartPlayerTurn(currentPlayer);
     }
-
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_StartPlayerTurn(PlayerRef player)
-    {
-        Debug.Log($"Player {player.PlayerId}'s turn started.");
-        // Enable input for this player
-    }
-    public void Fold()
-    {
-        //RPC_RequestFold(Runner.LocalPlayer);
-        localPLayer.RPC_Fold();
-    }
-
-    public void Contest()
-    {
-        //RPC_RequestContest(Runner.LocalPlayer);
-        localPLayer.RPC_Call();
-    }
-
-    
-    public void RPC_RequestFold(PlayerRef player)
-    {
-        //if (playerStatus.ContainsKey(player) && player == Runner.ActivePlayers.ElementAt(currentPlayerIndex))
-        {
-            playerStatus[player] = false;
-            Debug.Log($"Player {player.PlayerId} folded.");
-            NextTurn();
-        }
-    }
-
-    //[Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
-    public void RPC_RequestContest(PlayerRef player)
-    {
-        //if (playerStatus.ContainsKey(player) && player == Runner.ActivePlayers.ElementAt(currentPlayerIndex))
-        {
-            playerStatus[player] = true;
-            Debug.Log($"Player {player.PlayerId} contested.");
-            NextTurn();
-        }
-    }
-
-
+   
     private void NextTurn()
     {
         currentPlayerIndex++;
-        if (currentPlayerIndex >= Runner.ActivePlayers.Count())
-        {
-            Debug.Log("Determine the Winner");
-            DetermineWinner();
-        }
-        else
+        //currentPlayerIndex=currentPlayerIndex>= Runner.ActivePlayers.Count()&&!isBetMatched?0:;
+        checkplayerBets();
+        Debug.Log("Determine the Winner"+isBetMatched);
+        if (!DetermineWinner())
         {
             StartTurn();
         }
     }
 
-    private void DetermineWinner()
+    private bool DetermineWinner()
     {
         var remainingPlayers = playerStatus.Where(x => x.Value == true).ToList();
         if (remainingPlayers.Count == 1)
         {
-            DeclareWinner(remainingPlayers[0].Key);
+            RPC_DeclareWinner(remainingPlayers[0].Key);
+            GetNetworkPlayer(remainingPlayers[0].Key).updateChips(Pot_Size);
+            Invoke(nameof(TryStartNewRound), 3f);
+            //StartCoroutine(RestartingIN(3));
+            return true;
         }
-        else if (remainingPlayers.Count > 1)
+        else if (remainingPlayers.Count > 1 && /*currentPlayerIndex >= Runner.ActivePlayers.Count()&&*/ isBetMatched)//need to change it according to bets
         {
             var winner = remainingPlayers.OrderByDescending(x => playerNumbers[x.Key]).First().Key;
-            DeclareWinner(winner);
+
+            RPC_DeclareWinner(winner);
+            GetNetworkPlayer(winner).updateChips(Pot_Size);
+            Invoke(nameof(TryStartNewRound), 3f);
+            //StartCoroutine(RestartingIN(3));
+            return true;
+        }
+        else if (remainingPlayers.Count < 1 && /*currentPlayerIndex >= Runner.ActivePlayers.Count() &&*/ isBetMatched)//need to change it according to bets
+        {
+            //DeclareWinner(null);
+            Debug.Log("No one contested. Round is void.");
+            StartCoroutine(RestartingIN(3));
+            return true;
         }
         else
         {
-            Debug.Log("No one contested. Round is void.");
+            return false;
         }
 
-        // Auto-restart the game after 3 seconds only if 2 or more players are present
-        Invoke(nameof(TryStartNewRound), 3f);
-    }
-
-    private void DeclareWinner(PlayerRef winner)
-    {
-        Debug.Log($"Player {winner.PlayerId} wins with number: {playerNumbers[winner]}");
     }
 
     private void AssignNumbersToPlayers()
@@ -179,7 +175,7 @@ public class CardGameManager : NetworkBehaviour
         int randomNumber = GenerateUniqueNumber();
         playerNumbers[player] = randomNumber;
         Debug.Log($"Player {player.PlayerId} assigned number: {randomNumber}");
-       
+
         // Sync the number across the network
         RPC_SetPlayerNumber(player, randomNumber);
     }
@@ -200,9 +196,180 @@ public class CardGameManager : NetworkBehaviour
     private void ResetGameState()
     {
         playerNumbers.Clear();
-        playerStatus.Clear();
+        foreach (var player in Runner.ActivePlayers)
+        {
+            playerStatus[player] = true;
+        }
+        foreach (var player in Runner.ActivePlayers)
+        {
+            playerBets[player] = 0;
+        }
+        foreach (var player in playerList)
+        {
+            player.PreviousBet = 0;
+        }
         assignedNumbers.Clear();
+        Pot_Size = 0;
         currentPlayerIndex = 0;
+        Rasie = 0;
+    }
+
+    public void PlayerJoined(NetworkRunner runner, PlayerRef player)
+    {
+        if (runner.IsServer)
+        {
+            AssignUniqueNumber(player);
+            TryStartNewRound();
+        }
+        playerBets[player] = 0;
+        playerStatus[player] = true;
+        Debug.Log($"player Joined addeding him to playerStatus{playerStatus.Count},{playerBets.Count}");
+    }
+
+    public void PlayerLeft(PlayerRef player)
+    {
+        if (playerNumbers.ContainsKey(player))
+        {
+            assignedNumbers.Remove(playerNumbers[player]);
+            playerNumbers.Remove(player);
+            playerStatus.Remove(player);
+        }
+    }
+    public PlayerProfileUI AddPlayerProfile(string name)
+    {
+        //throw new NotImplementedException();
+        var obj = Instantiate(Slider, profileParent).GetComponent<PlayerProfileUI>();
+        obj.SetPlayerName(name);
+        return obj;
+    }
+    NetworkPlayer GetNetworkPlayer(PlayerRef player)
+    {
+        foreach (var t in playerList)
+        {
+            if (player.PlayerId == t.playerref.PlayerId)
+            {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    IEnumerator RestartingIN(int delaysec)
+    {
+        int timer = delaysec;
+        while (timer >= 0)
+        {
+            Debug.Log(timer);
+            yield return new WaitForSeconds(1f);
+            RoundDeclareStatustxt.text = $"next round starting in... {timer}";
+            timer--;
+        }
+        yield return new WaitForSeconds(1f);
+        RoundStatusGO.SetActive(false);
+    }
+
+    List<KeyValuePair<PlayerRef,int>> checkplayerBets()
+    {
+        var BetsnotMatched = playerBets.Where(x => x.Value !=Rasie).ToList();
+        Debug.Log($" List Size{playerBets.Count}");
+        isBetMatched = BetsnotMatched.Count == 0 && Rasie!=0;
+        return BetsnotMatched;
+    }
+
+    #region InputMethod
+    public void Fold()
+    {
+        RPC_RequestFold(Runner.LocalPlayer);
+    }
+
+    public void Contest()
+    {
+        RPC_RequestContest(Runner.LocalPlayer);
+    }
+
+    public void Bet()
+    {
+        RPC_Bet(Runner.LocalPlayer, bettingUI.Value);
+    }
+    #endregion
+    #region RPC
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_StartPlayerTurn(PlayerRef player)
+    {
+        Debug.Log($"Player {player.PlayerId}'s turn started.{GetNetworkPlayer(player) == null}");
+        RPC_SetMsg(player, "Its My Turn");
+        bettingUI.setSilder(localPLayer.Chips, 10);
+        MyInput.SetActive(player == Runner.LocalPlayer);
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_RequestFold(PlayerRef player)
+    {
+        if (playerStatus.ContainsKey(player) && player == Runner.ActivePlayers.ElementAt(currentPlayerIndex))
+        {
+            playerStatus[player] = false;
+            Debug.Log($"Player {player.PlayerId} folded.");
+            RPC_SetMsg(player, "I have Folded");
+            NextTurn();
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_RequestContest(PlayerRef player)
+    {
+        if (playerStatus.ContainsKey(player) && player == Runner.ActivePlayers.ElementAt(currentPlayerIndex))
+        {
+            playerStatus[player] = true;
+            Debug.Log($"Player {player.PlayerId} contested{player.PlayerId},{GetNetworkPlayer(player).playerref.PlayerId}.");
+            if (Rasie == 0)
+            {
+                Rasie = 10;
+                Pot_Size += Rasie;
+                playerBets[player] = Rasie;
+                GetNetworkPlayer(player).PreviousBet = 10;
+                GetNetworkPlayer(player).updateChips(-10);
+            }
+            else
+            {
+                if (GetNetworkPlayer(player).PreviousBet == 0)
+                {
+                    Pot_Size += Rasie;
+                    playerBets[player] = Rasie;
+                    GetNetworkPlayer(player).PreviousBet = Rasie;
+                    GetNetworkPlayer(player).updateChips(-Rasie);
+                }
+                else
+                {
+                    var diff = Mathf.Abs(Rasie - GetNetworkPlayer(player).PreviousBet);
+                    Pot_Size += diff;
+                    playerBets[player] = Rasie;
+                    GetNetworkPlayer(player).PreviousBet = Rasie;
+                    GetNetworkPlayer(player).updateChips(-diff);
+                }
+            }
+            RPC_SetMsg(player, "I have Called");
+            NextTurn();
+        }
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_DeclareWinner(PlayerRef winner)
+    {
+        //GetNetworkPlayer(winner).
+        RoundStatusGO.SetActive(true);
+        if (Runner.LocalPlayer != winner)
+        {
+            RoundStatustxt.text = "You Lost";
+
+            Debug.Log("You Lost");
+        }
+        else
+        {
+            RoundStatustxt.text = "You Won";
+            Debug.Log("You Won");
+        }
+        Debug.Log($"Player {winner.PlayerId} wins with number: {playerNumbers[winner]}");
+        StartCoroutine(RestartingIN(3));
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -218,41 +385,32 @@ public class CardGameManager : NetworkBehaviour
         }
     }
 
-    public void PlayerJoined(NetworkRunner runner, PlayerRef player)
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_Bet(PlayerRef player, int Amount)
     {
-        if (runner.IsServer)
+        if (playerStatus.ContainsKey(player) && player == Runner.ActivePlayers.ElementAt(currentPlayerIndex))
         {
-            AssignUniqueNumber(player);
             playerStatus[player] = true;
-            TryStartNewRound();
+            Debug.Log($"Player {player.PlayerId} Bet {Amount}.");
+            //TODO: Writing the Betting Logic
+            Pot_Size += Amount;
+            Rasie = GetNetworkPlayer(player).PreviousBet + Amount;
+            playerBets[player] = Rasie;
+            GetNetworkPlayer(player).PreviousBet = Rasie;
+            GetNetworkPlayer(player).updateChips(-Amount);
+            checkplayerBets();
+            RPC_SetMsg(player, "I have Folded");
+            NextTurn();
         }
     }
 
-    public void PlayerLeft(PlayerRef player)
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_SetMsg(PlayerRef player, string msg)
     {
-        if (playerNumbers.ContainsKey(player))
-        {
-            assignedNumbers.Remove(playerNumbers[player]);
-            playerNumbers.Remove(player);
-            playerStatus.Remove(player);
-        }
+        if (player != Runner.LocalPlayer && GetNetworkPlayer(player) != null)
+            GetNetworkPlayer(player).SentMsg(msg);
     }
-    public PlayerProfileUI AddPlayerProfile(string name)
-    {
-        //throw new NotImplementedException();
-        var obj=Instantiate(Slider,profileParent).GetComponent<PlayerProfileUI>();
-        obj.SetPlayerName(name);
-        return obj;
-    }
-    NetworkPlayer GetNetworkPlayer(PlayerRef player)
-    {
-        foreach(var t in playerList)
-        {
-            if(player==t.playerref)
-            {
-                return t;
-            }
-        }
-        return null;
-    }
+
+
+    #endregion
 }
